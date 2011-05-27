@@ -85,7 +85,8 @@ data Header = Header Text Text
 -- | The main function of the framework. Takes a web application which
 --   returns something which can be converted to a ResponseBody, and
 --   lifts it up into a proper runnable WAI `Application` value.
-uWeb :: Convertible a ResponseBody => AppT (Request, BS.ByteString) IO a -> Application
+uWeb :: Convertible a ResponseBody =>
+    AppT (Request, BS.ByteString) IO a -> Application
 uWeb app req = liftIO . dispatch app req =<< BS.concat <$> consume
   where dispatch app req body = do
             response <- runAppT app (req, body)
@@ -121,17 +122,17 @@ convHdrs = Prelude.map convHdr . Prelude.filter notStat
 -- | A helper function which sets an HTTP header field.
 --   Calling it multiple times with the same field name
 --   will result in multiple header entries for that field.
-httpHeader :: Monad m => Text -> Text -> AppT (Request, BS.ByteString) m ()
+httpHeader :: Monad m => Text -> Text -> AppT r m ()
 httpHeader key val = tell [Header key val]
 
 -- | A helper function which sets the HTTP status code.
 --   If called multiple times the last invocation will take
 --   precedence over all the others.
-httpStatus :: Monad m => HTTP.Status -> AppT (Request, BS.ByteString) m ()
+httpStatus :: Monad m => HTTP.Status -> AppT r m ()
 httpStatus code = tell [Status code]
 
 -- | A helper function which throws a page generation error.
-pageError :: Monad m => Text -> AppT (Request, BS.ByteString) m ()
+pageError :: Monad m => Text -> AppT r m ()
 pageError err = throwError (Failure err)
 
 
@@ -159,17 +160,15 @@ instance WebRequestPath (Request, BS.ByteString) where
 --   argument in an environment with that element stripped off the list.
 --   Throws a page generation error if the list is empty or the head
 --   doesn't match the expected value.
+url :: (WebRequestPath r, MonadReader r m, MonadPlus m) => Text -> m b -> m b
 url s a = do
     req <- ask
-    let p = readRequestPath req
-    guard $ not (null p)
-    guard $ head p == s
+    guard . not    . null . readRequestPath $ req
+    guard . (== s) . head . readRequestPath $ req
     local (\_ -> editRequestPath tail req) a
 
 -- | Does the opposite of the `url` helper function, and errors out unless
 --   all elements of the `pathInfo` list have been consumed. Essentially
 --   matches against the URL fragment "/".
-leafPage a = do
-    req <- ask
-    guard . null . readRequestPath $ req
-    a
+leaf :: (WebRequestPath a, MonadReader a m, MonadPlus m) => m b -> m b
+leaf a = ask >>= \req -> (guard . null . readRequestPath $ req) >> a
