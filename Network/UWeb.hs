@@ -4,14 +4,15 @@
 
 module Network.UWeb where
 
-import Data.List            (head, tail, foldl', null, map)
-import Data.Char            (digitToInt, chr)
-import Data.Text            (Text(..), pack)
-import Data.Text.Encoding   (encodeUtf8)
-import Data.Convertible     (Convertible, safeConvert)
-import Data.CaseInsensitive (mk)
-import Data.Enumerator.List (consume)
-import Network.Wai          (Request(..), Application, responseLBS)
+import Data.List                (head, tail, foldl', null, map)
+import Data.Char                (digitToInt, chr)
+import Data.Text                (Text(..), pack)
+import Data.Text.Encoding       (encodeUtf8, decodeUtf8With)
+import Data.Text.Encoding.Error (lenientDecode)
+import Data.Convertible         (Convertible, safeConvert)
+import Data.CaseInsensitive     (mk)
+import Data.Enumerator.List     (consume)
+import Network.Wai              (Request(..), Application, responseLBS)
 
 import Control.Applicative
 import Control.Monad.Trans
@@ -85,9 +86,8 @@ data Header = Header Text Text
 -- | The main function of the framework. Takes a web application which
 --   returns something which can be converted to a ResponseBody, and
 --   lifts it up into a proper runnable WAI `Application` value.
-uWeb :: Convertible a ResponseBody =>
-    AppT (Request, BS.ByteString) IO a -> Application
-uWeb app req = liftIO . dispatch app req =<< BS.concat <$> consume
+uWeb :: Convertible a ResponseBody => AppT (Request, FormData) IO a -> Application
+uWeb app req = liftIO . dispatch (withFormData app) req =<< BS.concat <$> consume
   where dispatch app req body = do
             response <- runAppT app (req, body)
             return $ case response of
@@ -113,6 +113,37 @@ convHdrs = Prelude.map convHdr . Prelude.filter notStat
   where convHdr (Header name val) = (mk $ encodeUtf8 name, encodeUtf8 val)
         notStat (Header _ _) = True
         notStat (Status  _ ) = False
+
+
+----------------------------------
+-- FORM DATA PARSING MIDDLEWARE --
+----------------------------------
+
+data FormData = URLEncoded [(Text, Text)]
+              | MultiPart  [(Text, Text, BS.ByteString)]
+              deriving (Eq, Show)
+
+withFormData :: AppT (Request, FormData) m a -> AppT (Request, BS.ByteString) m a
+withFormData = AppT . withReaderT (\(r,s) -> (r, parseFormData r s)) . unAppT
+
+parseFormData :: Request -> BS.ByteString -> FormData
+parseFormData req
+  | ct == Just "multipart/form-data" = MultiPart  . parseMP
+  | otherwise                        = URLEncoded . parseKV
+  where ct = "content-type" `lookup` requestHeaders req
+
+-- | A helper function which decodes url-encoded HTTP requests.
+parseKV :: BS.ByteString -> [(Text, Text)]
+parseKV = map (decodeKV . BS.break (== '=')) . BS.split '&'
+  where decodeKV (a, b) = (decode a, decode (BS.tail b))
+        decode = pack . url . BS.unpack
+        url ('+':xs) = ' ' : url xs
+        url ('%':x:y:zs) = chr (16 * digitToInt x + digitToInt y) : url zs
+        url (x:xs) = x : url xs
+        url [] = []
+
+parseMP :: BS.ByteString -> [(Text, Text, BS.ByteString)]
+parseMP s = [("", "", s)]
 
 
 -----------------------------------------
@@ -145,11 +176,34 @@ class WebRequestPath r where
     readRequestPath :: r -> [Text]
     editRequestPath :: ([Text] -> [Text]) -> r -> r
 
--- | The top-level application request type provides path elements
-instance WebRequestPath (Request, BS.ByteString) where
-    readRequestPath = pathInfo . fst
-    editRequestPath f (w, b) = (w { pathInfo = f (pathInfo w) } , b)
+-- | A typeclass for request types which provide submitted form data
+class WebRequestForm r where
+    readRequestForm :: r -> FormData
+    editRequestForm :: (FormData -> FormData) -> r -> r
 
+-- | The top-level application request type provides path elements
+instance WebRequestPath (Request, FormData) where
+    readRequestPath = pathInfo . fst
+    editRequestPath f (r, d) = (r { pathInfo = f (pathInfo r) } , d)
+
+-- | The top-level application request type provides form data
+instance WebRequestForm (Request, FormData) where
+    readRequestForm = snd
+    editRequestForm f (r, d) = (r , f d)
+
+-- | Get a list of key-value pairs from the form data
+formDataKV :: (WebRequestForm r, MonadReader r m, Functor m, MonadPlus m) => m [(Text, Text)]
+formDataKV = form' . readRequestForm <$> ask
+  where form' (URLEncoded ue) = ue
+        form' (MultiPart  mp) = map unwrap mp
+        unwrap (key, ct, val) = (key, decodeUtf8With lenientDecode val)
+
+-- | Get a list of key-ContentType-value triplets from the form data
+formDataMP :: (WebRequestForm r, MonadReader r m, Functor m, MonadPlus m) => m [(Text, Text, BS.ByteString)]
+formDataMP = form' . readRequestForm <$> ask
+  where form' (URLEncoded ue) = map wrap ue
+        form' (MultiPart  mp) = mp
+        wrap (key, val)       = (key, "text/plain", encodeUtf8 val)
 
 -------------------------
 -- ROUTING COMBINATORS --
