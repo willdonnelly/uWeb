@@ -2,7 +2,7 @@
   , MultiParamTypeClasses, UndecidableInstances, FlexibleContexts
   , TypeSynonymInstances #-}
 
-module UWeb where
+module Network.UWeb where
 
 import Control.Applicative
 import Control.Monad.Trans

@@ -1,0 +1,26 @@
+name:          uWeb
+version:       0.0.1
+category:      Web
+synopsis:      A microframework for web application development on top of WAI.
+
+description:   TODO: Add a description
+
+homepage:      http://github.com/willdonnelly/uWeb
+bug-reports:   http://github.com/willdonnelly/uWeb/issues
+stability:     alpha
+author:        Will Donnelly
+maintainer:    Will Donnelly <wgd@willdonnelly.net>
+copyright:     (c) 2011 Will Donnelly
+license:       BSD3
+license-file:  LICENSE
+
+build-type:    Simple
+cabal-version: >= 1.6
+
+library
+  exposed-modules: Network.UWeb
+  build-depends:   base
+
+source-repository head
+  type:     git
+  location: git://github.com/willdonnelly/uWeb.git
