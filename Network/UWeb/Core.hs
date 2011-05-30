@@ -1,10 +1,11 @@
 {-# LANGUAGE OverloadedStrings, GeneralizedNewtypeDeriving
-  , MultiParamTypeClasses, FlexibleContexts, TypeSynonymInstances #-}
+  , MultiParamTypeClasses, FlexibleContexts #-}
 
 module Network.UWeb.Core where
 
 import Data.List                (foldl')
 import Data.Char                (digitToInt, chr)
+import Data.String              (IsString(..))
 import Data.Text                (Text(..), pack)
 import Data.Text.Encoding       (encodeUtf8)
 import Data.Convertible         (Convertible, safeConvert)
@@ -53,7 +54,7 @@ runAppT app req = runErrorT . runWriterT . (flip runReaderT req) . unAppT $ app
 
 -- | WAI uses a lazy ByteString for the response body, so this type
 --   synonym exists to make Convertible instances prettier
-type ResponseBody = LS.ByteString
+newtype ResponseBody = ResponseBody LS.ByteString deriving (IsString)
 
 -- | The Failure type is used to represent page generation errors.
 --   It can be ignored in favor of the `pageError` helper function.
@@ -68,7 +69,9 @@ instance Error Failure where
 -- | We need to be able to output failure messages as a response,
 --   so they need to be convertible to a ResponseBody
 instance Convertible Failure ResponseBody where
-    safeConvert (Failure e) = Right . LS.fromChunks . (:[]) . encodeUtf8 $ e
+    safeConvert (Failure e) = wrap . conv $ e
+      where conv = LS.fromChunks . (:[]) . encodeUtf8
+            wrap = Right . ResponseBody
 
 -- | The Header type is used to store HTTP headers and the HTTP status
 --   code, as both of these can be set during page generation through
@@ -90,16 +93,17 @@ uWeb app req = liftIO . dispatch (withFormData app) req =<< BS.concat <$> consum
   where dispatch app req body = do
             response <- runAppT app (req, body)
             return $ case response of
-                Left failure -> do
-                    case safeConvert failure of
-                        Left err -> responseLBS status500 [] errFail
-                        Right cr -> responseLBS status500 [] cr
-                Right (b, h) ->
-                    case safeConvert b of
-                        Left err -> responseLBS status500 [] errSucc
-                        Right cr -> responseLBS (convStat h) (convHdrs h) cr
+              Left failure -> do
+                case safeConvert failure of
+                  Left err -> responseLBS status500 [] errFail
+                  Right cr -> responseLBS status500 [] (unRBody cr)
+              Right (b, h) ->
+                case safeConvert b of
+                  Left err -> responseLBS status500 [] errSucc
+                  Right cr -> responseLBS (convStat h) (convHdrs h) (unRBody cr)
         errFail = "request failed -- unable to render response"
         errSucc = "request succeeded -- unable to render response"
+        unRBody = \(ResponseBody rb) -> rb
 
 -- | Comb through a list of headers and find the HTTP status code
 convStat = foldl' nextStat statusOK

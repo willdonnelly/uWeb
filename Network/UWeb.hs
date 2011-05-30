@@ -3,5 +3,5 @@ module Network.UWeb
   , module Network.UWeb.Util
   ) where
 
-import Network.UWeb.Core (AppT, ResponseBody, uWeb)
+import Network.UWeb.Core (AppT, ResponseBody(..), uWeb)
 import Network.UWeb.Util
